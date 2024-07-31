@@ -1,7 +1,13 @@
 # Media Samples
 
 This repository contains media samples for testing purposes.
-To use them, you must have Git LFS installed on your system.
+
+To use them in docker:
+```dockerfile
+RUN apt-get update && apt-get install -y git-lfs
+RUN git clone --depth 1 https://github.com/livekit/media-samples.git
+RUN cd media-samples && git lfs pull
+```
 
 ## Attribution
 
