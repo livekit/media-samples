@@ -1,4 +1,17 @@
-// Package avsync analyzes composited audio/video files for A/V sync markers.
+// Copyright 2026 LiveKit, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package avsync
 
 import (
@@ -10,8 +23,8 @@ import (
 // Colors used by the test content generator for participant identification.
 var (
 	ColorWhite  = color.White
-	ColorCyan   = color.RGBA{0, 255, 255, 255}
-	ColorYellow = color.RGBA{255, 255, 0, 255}
+	ColorCyan   = color.RGBA{R: 0, G: 255, B: 255, A: 255}
+	ColorYellow = color.RGBA{R: 255, G: 255, B: 0, A: 255}
 )
 
 // Pre-defined participants matching the test content generator output.
