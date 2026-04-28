@@ -140,7 +140,6 @@ func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout 
 	)
 
 	args := []string{
-		"-r", "25",
 		"-i", filePath,
 		"-filter_complex", filterComplex,
 		"-map", "[fout]", "-f", "null", "-",
