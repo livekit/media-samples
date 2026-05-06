@@ -23,7 +23,7 @@ import (
 func TestRunFFmpeg(t *testing.T) {
 	tmpDir := t.TempDir()
 	outFile := filepath.Join(tmpDir, "test.wav")
-	err := runFFmpeg(runFFmpegArgs{
+	_, err := runFFmpeg(runFFmpegArgs{
 		args:    []string{"-f", "lavfi", "-t", "0.1", "-i", "anullsrc=r=8000:cl=mono", "-f", "wav", outFile},
 		timeout: 0,
 	})
@@ -40,7 +40,7 @@ func TestRunFFmpeg(t *testing.T) {
 }
 
 func TestRunFFmpegFailure(t *testing.T) {
-	err := runFFmpeg(runFFmpegArgs{
+	_, err := runFFmpeg(runFFmpegArgs{
 		args:    []string{"-i", "nonexistent_file_12345.wav", "-f", "null", "-"},
 		timeout: 0,
 	})

@@ -33,7 +33,7 @@ type runFFmpegArgs struct {
 	timeout time.Duration // 0 = 60s default
 }
 
-func runFFmpeg(r runFFmpegArgs) error {
+func runFFmpeg(r runFFmpegArgs) ([]byte, error) {
 	timeout := r.timeout
 	if timeout == 0 {
 		timeout = 60 * time.Second
@@ -41,26 +41,6 @@ func runFFmpeg(r runFFmpegArgs) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpegPath(), append([]string{"-hide_banner", "-nostats", "-loglevel", "repeat+info"}, r.args...)...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("ffmpeg timed out after %s", timeout)
-		}
-		return fmt.Errorf("ffmpeg failed: %w\nstderr:\n%s", err, stderr.String())
-	}
-	return nil
-}
-
-func runFFmpegWithStderr(r runFFmpegArgs) ([]byte, error) {
-	timeout := r.timeout
-	if timeout == 0 {
-		timeout = 60 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, ffmpegPath(), append([]string{"-hide_banner", "-nostats", "-loglevel", "info"}, r.args...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

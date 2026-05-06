@@ -40,10 +40,7 @@ func newColorClassifier(participants []Participant) *colorClassifier {
 	cc := &colorClassifier{}
 	for _, p := range participants {
 		r, g, b, _ := p.Color.RGBA()
-		r8 := float64(r >> 8)
-		g8 := float64(g >> 8)
-		b8 := float64(b >> 8)
-		_, cb, cr := color.RGBToYCbCr(uint8(r8), uint8(g8), uint8(b8))
+		_, cb, cr := color.RGBToYCbCr(uint8(r>>8), uint8(g>>8), uint8(b>>8))
 		cc.targets = append(cc.targets, colorTarget{
 			name: p.Name,
 			u:    float64(cb),

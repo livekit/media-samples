@@ -146,7 +146,7 @@ func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout 
 		"-map", "[lout]", "-f", "null", "-",
 	}
 
-	if err := runFFmpeg(runFFmpegArgs{args: args, timeout: timeout}); err != nil {
+	if _, err := runFFmpeg(runFFmpegArgs{args: args, timeout: timeout}); err != nil {
 		return fmt.Errorf("ffmpeg: %w", err)
 	}
 

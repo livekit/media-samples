@@ -100,7 +100,7 @@ func detectBeeps(cfg Config, p Participant, tmpDir string) ([]Beep, error) {
 		"-f", "null", "-",
 	}
 
-	if err := runFFmpeg(runFFmpegArgs{args: args, timeout: cfg.Timeout}); err != nil {
+	if _, err := runFFmpeg(runFFmpegArgs{args: args, timeout: cfg.Timeout}); err != nil {
 		return nil, err
 	}
 
@@ -137,12 +137,7 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 		}
 
 		if m := reRMSLevel.FindStringSubmatch(line); m != nil {
-			valStr := m[1]
-			// Skip non-numeric values like "inf" or "nan"
-			if strings.EqualFold(valStr, "inf") || strings.EqualFold(valStr, "nan") || strings.EqualFold(valStr, "-inf") {
-				continue
-			}
-			rms, err := strconv.ParseFloat(valStr, 64)
+			rms, err := strconv.ParseFloat(m[1], 64)
 			if err != nil {
 				continue
 			}
@@ -181,7 +176,7 @@ func detectSilence(cfg Config) ([]SilenceRange, error) {
 		"-f", "null", "-",
 	}
 
-	stderr, err := runFFmpegWithStderr(runFFmpegArgs{args: args, timeout: cfg.Timeout})
+	stderr, err := runFFmpeg(runFFmpegArgs{args: args, timeout: cfg.Timeout})
 	if err != nil {
 		return nil, err
 	}
