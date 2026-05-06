@@ -82,7 +82,7 @@ generate_h264() {
 [0:v]drawtext=fontfile=${FONT}:text='${label}':x=20:y=16:fontsize=36:fontcolor=${color}:box=1:boxcolor=0x00000099,\
 drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=${color}:box=1:boxcolor=0x000000bb,\
 drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w-tw-20:y=20:fontsize=28:fontcolor=${color}:box=1:boxcolor=0x00000099,\
-drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=8:color=white@0.85:t=fill[basev];\
+drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill[basev];\
 [1:v]scale=-1:100[logo];\
 [basev][logo]overlay=shortest=1:x=20:y=main_h-overlay_h-20,format=yuv420p[v]" \
       -map "[v]" -an \
@@ -103,7 +103,7 @@ generate_vp8() {
 [0:v]drawtext=fontfile=${FONT}:text='${label}':x=20:y=16:fontsize=36:fontcolor=${color}:box=1:boxcolor=0x00000099,\
 drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=${color}:box=1:boxcolor=0x000000bb,\
 drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w-tw-20:y=20:fontsize=28:fontcolor=${color}:box=1:boxcolor=0x00000099,\
-drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=8:color=white@0.85:t=fill,format=yuv420p[basev];\
+drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill,format=yuv420p[basev];\
 [1:v]scale=-1:100[logo];\
 [basev][logo]overlay=shortest=1:x=20:y=main_h-overlay_h-20[v]" \
       -map "[v]" -an \
@@ -122,7 +122,7 @@ generate_vp9() {
 [0:v]drawtext=fontfile=${FONT}:text='${label}':x=20:y=16:fontsize=36:fontcolor=${color}:box=1:boxcolor=0x00000099,\
 drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=${color}:box=1:boxcolor=0x000000bb,\
 drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w-tw-20:y=20:fontsize=28:fontcolor=${color}:box=1:boxcolor=0x00000099,\
-drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=8:color=white@0.85:t=fill,format=yuv444p12le[basev];\
+drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill,format=yuv444p12le[basev];\
 [1:v]scale=-1:100[logo];\
 [basev][logo]overlay=shortest=1:x=20:y=main_h-overlay_h-20[v]" \
       -map "[v]" -an \
