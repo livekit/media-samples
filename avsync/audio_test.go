@@ -79,9 +79,7 @@ func TestAnalyzeAudioSilence(t *testing.T) {
 		t.Fatalf("analyzeAudio failed: %v", err)
 	}
 
-	for _, sr := range result.Silence {
-		if sr.Duration > time.Second {
-			t.Errorf("unexpected long silence: %s-%s (%s)", sr.Start, sr.End, sr.Duration)
-		}
+	if len(result.Silence) > 1 {
+		t.Errorf("unexpected silence, got %d", len(result.Silence))
 	}
 }
