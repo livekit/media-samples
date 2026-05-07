@@ -36,7 +36,11 @@ const (
 )
 
 var (
-	reRMSLevel     = regexp.MustCompile(`RMS_level[=:](-?[0-9.]+)`)
+	// reChannelRMS matches per-channel RMS levels emitted by astats, e.g.:
+	//   lavfi.astats.1.RMS_level=-31.596143
+	// Channel index 1 = left, 2 = right (mono inputs only emit channel 1).
+	// We deliberately do NOT match `Overall.RMS_level` (averages channels).
+	reChannelRMS   = regexp.MustCompile(`lavfi\.astats\.(\d+)\.RMS_level=(-?[0-9.]+)`)
 	rePTSTime      = regexp.MustCompile(`pts_time:([0-9.]+)`)
 	reSilenceStart = regexp.MustCompile(`silence_start:\s*([0-9.]+)`)
 	reSilenceEnd   = regexp.MustCompile(`silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)`)
@@ -89,8 +93,11 @@ func analyzeAudio(cfg Config) (AudioResult, error) {
 func detectBeeps(cfg Config, p Participant, tmpDir string) ([]Beep, error) {
 	logFile := filepath.Join(tmpDir, fmt.Sprintf("beep_%s.log", p.Name))
 
+	// Print all astats metadata (rather than just Overall.RMS_level) so the
+	// parser can read per-channel RMS and identify which channel(s) a beep
+	// landed on. Used by audio-routing tests.
 	filter := fmt.Sprintf(
-		"bandpass=f=%.0f:width_type=h:w=%.0f,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=%s",
+		"bandpass=f=%.0f:width_type=h:w=%.0f,astats=metadata=1:reset=1,ametadata=print:file=%s",
 		p.BeepFreq, bandpassWidth, logFile,
 	)
 
@@ -107,7 +114,16 @@ func detectBeeps(cfg Config, p Participant, tmpDir string) ([]Beep, error) {
 	return parseBeepLog(logFile, p.Name)
 }
 
-// parseBeepLog reads the ametadata log file and extracts debounced beep timestamps.
+// parseBeepLog reads the metadata log file and extracts debounced beep
+// timestamps. Each frame in the log emits per-channel RMS values (channel 1 =
+// left, 2 = right; mono inputs emit only channel 1). The parser accumulates
+// per-channel RMS for each frame and, when the next pts_time is seen, decides:
+//
+//   - both channels above threshold      → BeepChannelBoth
+//   - only channel 1 above threshold     → BeepChannelLeft
+//   - only channel 2 above threshold     → BeepChannelRight
+//   - mono input, channel 1 above        → BeepChannelBoth
+//   - neither above threshold            → no beep emitted
 func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 	f, err := os.Open(logFile)
 	if err != nil {
@@ -118,46 +134,88 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 	var beeps []Beep
 	var lastBeepPTS time.Duration = -1
 
-	// The log alternates: pts_time line, then RMS_level line (or vice versa).
-	// We accumulate (pts, rms) pairs and emit beeps when rms > threshold.
 	var currentPTS time.Duration = -1
-	var hasPTS bool
+	channelRMS := map[int]float64{}
+	hasFrame := false
+
+	flushFrame := func() {
+		if !hasFrame {
+			return
+		}
+		ch1, has1 := channelRMS[1]
+		ch2, has2 := channelRMS[2]
+		var channel BeepChannel
+		switch {
+		case has1 && has2:
+			ch1Above := ch1 > beepRMSThreshold
+			ch2Above := ch2 > beepRMSThreshold
+			switch {
+			case ch1Above && ch2Above:
+				channel = BeepChannelBoth
+			case ch1Above:
+				channel = BeepChannelLeft
+			case ch2Above:
+				channel = BeepChannelRight
+			default:
+				return // no beep on either channel
+			}
+		case has1:
+			// Mono input: only channel 1 reported.
+			if ch1 <= beepRMSThreshold {
+				return
+			}
+			channel = BeepChannelBoth
+		default:
+			return
+		}
+
+		// Debounce: only emit if we're at least beepMinGap past last beep.
+		if lastBeepPTS < 0 || currentPTS-lastBeepPTS >= beepMinGap {
+			beeps = append(beeps, Beep{
+				PTS:         currentPTS,
+				Participant: participantName,
+				Channel:     channel,
+			})
+			lastBeepPTS = currentPTS
+		}
+	}
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
 
 		if m := rePTSTime.FindStringSubmatch(line); m != nil {
+			// New frame starts: flush the previous frame's accumulated values.
+			flushFrame()
 			secs, err := strconv.ParseFloat(m[1], 64)
 			if err == nil {
 				currentPTS = secToDuration(secs)
-				hasPTS = true
+				channelRMS = map[int]float64{}
+				hasFrame = true
 			}
 			continue
 		}
 
-		if m := reRMSLevel.FindStringSubmatch(line); m != nil {
-			rms, err := strconv.ParseFloat(m[1], 64)
+		if !hasFrame {
+			continue
+		}
+
+		if m := reChannelRMS.FindStringSubmatch(line); m != nil {
+			ch, err := strconv.Atoi(m[1])
+			if err != nil {
+				continue
+			}
+			rms, err := strconv.ParseFloat(m[2], 64)
 			if err != nil {
 				continue
 			}
 			if math.IsInf(rms, 0) || math.IsNaN(rms) {
 				continue
 			}
-
-			if hasPTS && rms > beepRMSThreshold {
-				// Debounce: only emit if we're at least beepMinGap past last beep.
-				if lastBeepPTS < 0 || currentPTS-lastBeepPTS >= beepMinGap {
-					beeps = append(beeps, Beep{
-						PTS:         currentPTS,
-						Participant: participantName,
-					})
-					lastBeepPTS = currentPTS
-				}
-			}
-			hasPTS = false
+			channelRMS[ch] = rms
 		}
 	}
+	flushFrame() // last frame in the log
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan beep log: %w", err)

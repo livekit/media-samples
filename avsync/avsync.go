@@ -74,9 +74,24 @@ type AudioResult struct {
 	Silence []SilenceRange
 }
 
+// BeepChannel identifies which stereo channel(s) a beep was detected on.
+type BeepChannel int
+
+const (
+	// BeepChannelBoth indicates the beep was detected on both stereo channels
+	// (or on the only channel for mono input). Most tests produce this.
+	BeepChannelBoth BeepChannel = 0
+	// BeepChannelLeft indicates the beep was detected only on the left channel.
+	// Used by audio routing tests where a participant is mapped to one channel.
+	BeepChannelLeft BeepChannel = 1
+	// BeepChannelRight indicates the beep was detected only on the right channel.
+	BeepChannelRight BeepChannel = 2
+)
+
 type Beep struct {
 	PTS         time.Duration
 	Participant string
+	Channel     BeepChannel
 }
 
 type SilenceRange struct {
