@@ -135,10 +135,13 @@ drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill,for
 # Audio generators (per-participant)
 # ─────────────────────────────────────────────────────────────────────
 
-# Beep expression: 10ms Hann-windowed tone at the start of each second
+# Beep expression: 40ms Hann-windowed tone at the start of each second.
+# 40ms spans at least one full MP3 frame (~26ms at 44.1kHz, 1152 samples), so
+# the tone survives MP3's per-frame perceptual masking. Shorter beeps got
+# dropped by lossy codecs.
 beep_expr() {
     local freq=$1
-    echo "0.12*if(lt(mod(t,1),0.01),(1-cos(2*PI*mod(t,1)/0.01))/2*sin(2*PI*${freq}*t),0)"
+    echo "0.12*if(lt(mod(t,1),0.04),(1-cos(2*PI*mod(t,1)/0.04))/2*sin(2*PI*${freq}*t),0)"
 }
 
 # Background expression: continuous low-amplitude tone
