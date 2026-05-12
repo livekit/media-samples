@@ -19,50 +19,87 @@ import (
 	"time"
 )
 
+// Observed jitter across all sample files is <1µs (just float rounding
+// in pts_time parsing). 1ms is 1000x tighter than the prior ±100ms
+// bound while still tolerating ffmpeg-version drift.
+const beepPTSTolerance = 1 * time.Millisecond
+
+// audioFile describes a generated sample we expect the analyzer to read.
+type audioFile struct {
+	path string
+	part string // expected participant for every detected beep
+}
+
+var allAudioFiles = []audioFile{
+	{"../livekit_avsync_p0_audio_523hz_48k.ogg", "p0"},
+	{"../livekit_avsync_p1_audio_659hz_48k.ogg", "p1"},
+	{"../livekit_avsync_p2_audio_784hz_48k.ogg", "p2"},
+	{"../livekit_avsync_p0_audio_523hz_48k.wav", "p0"},
+	{"../livekit_avsync_p0_audio_523hz_8k.pcma.wav", "p0"},
+	{"../livekit_avsync_p0_audio_523hz_8k.pcmu.wav", "p0"},
+}
+
 func TestAnalyzeAudio(t *testing.T) {
-	cfg := Config{
-		FilePath:     "../livekit_avsync_p0_audio_523hz_48k.ogg",
-		Participants: AllParticipants,
-		Timeout:      30 * time.Second,
-	}
-
-	beeps, err := analyzeAudio(cfg)
-	if err != nil {
-		t.Fatalf("analyzeAudio failed: %v", err)
-	}
-
-	p0Count, p1Count, p2Count := 0, 0, 0
-	for _, b := range beeps {
-		switch b.Participant {
-		case "p0":
-			p0Count++
-		case "p1":
-			p1Count++
-		case "p2":
-			p2Count++
-		}
-	}
-
-	if p0Count < 115 || p0Count > 125 {
-		t.Errorf("expected ~120 p0 beeps, got %d", p0Count)
-	}
-	if p1Count > 5 {
-		t.Errorf("expected ~0 p1 beeps, got %d", p1Count)
-	}
-	if p2Count > 5 {
-		t.Errorf("expected ~0 p2 beeps, got %d", p2Count)
-	}
-
-	var lastP0 time.Duration
-	for _, b := range beeps {
-		if b.Participant == "p0" {
-			if lastP0 > 0 {
-				gap := b.PTS - lastP0
-				if gap < 900*time.Millisecond || gap > 1100*time.Millisecond {
-					t.Errorf("p0 beep gap: %s (expected ~1s)", gap)
-				}
+	for _, af := range allAudioFiles {
+		t.Run(af.part+"/"+af.path, func(t *testing.T) {
+			beeps, err := analyzeAudio(Config{
+				FilePath:     af.path,
+				Participants: AllParticipants,
+				Timeout:      30 * time.Second,
+			})
+			if err != nil {
+				t.Fatalf("analyzeAudio: %v", err)
 			}
-			lastP0 = b.PTS
+			checkBeeps(t, beeps, af.part)
+		})
+	}
+}
+
+// checkBeeps verifies the analyzer found exactly 120 beeps for wantPart
+// at the expected per-second cadence, with no cross-talk into the other
+// two participants' bandpass filters.
+func checkBeeps(t *testing.T, beeps []Beep, wantPart string) {
+	t.Helper()
+
+	var got []Beep
+	counts := map[string]int{}
+	for _, b := range beeps {
+		counts[b.Participant]++
+		if b.Participant == wantPart {
+			got = append(got, b)
 		}
 	}
+
+	if len(got) != 120 {
+		t.Errorf("%s beeps: got %d, want exactly 120", wantPart, len(got))
+	}
+	for _, p := range []string{"p0", "p1", "p2"} {
+		if p == wantPart {
+			continue
+		}
+		if counts[p] != 0 {
+			t.Errorf("%s beeps: got %d, want 0 (bandpass at participant freq should reject the source tone)", p, counts[p])
+		}
+	}
+
+	for i, b := range got {
+		want := time.Duration(i) * time.Second
+		if diff := absDuration(b.PTS - want); diff > beepPTSTolerance {
+			t.Errorf("%s beep %d: PTS=%s, want %s ±%s (off by %s)", wantPart, i, b.PTS, want, beepPTSTolerance, diff)
+		}
+	}
+
+	for i := 1; i < len(got); i++ {
+		gap := got[i].PTS - got[i-1].PTS
+		if diff := absDuration(gap - time.Second); diff > beepPTSTolerance {
+			t.Errorf("%s beep gap [%d]: %s, want 1s ±%s", wantPart, i, gap, beepPTSTolerance)
+		}
+	}
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }

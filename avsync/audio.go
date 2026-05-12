@@ -27,9 +27,10 @@ import (
 )
 
 const (
-	beepRMSThreshold = -35.0 // dB: after bandpass filter, beep is detected above this
-	beepMinGap       = 200 * time.Millisecond
-	bandpassWidth    = 50.0 // Hz
+	beepRMSThreshold   = -35.0 // dB: after bandpass filter, beep is detected above this
+	beepMinGap         = 200 * time.Millisecond
+	beepDetectionDelay = 10 * time.Millisecond
+	bandpassWidth      = 50.0 // Hz
 )
 
 var (
@@ -80,8 +81,16 @@ func detectBeeps(cfg Config, p Participant, tmpDir string) ([]Beep, error) {
 	// Print all astats metadata (rather than just Overall.RMS_level) so the
 	// parser can read per-channel RMS and identify which channel(s) a beep
 	// landed on. Used by audio-routing tests.
+	//
+	// Resample to 48 kHz then chunk into fixed 480-sample (10 ms) frames
+	// before bandpass+astats. Without this, the analysis frame size is set
+	// by the codec (Opus ≈21 ms, raw PCM up to ~128 ms at 8 kHz), and the
+	// beep onset can land anywhere within that frame, giving codec-specific
+	// PTS skew up to ±60 ms. With a uniform 10 ms window every codec reports
+	// the same beep onset within ~1 µs.
 	filter := fmt.Sprintf(
-		"bandpass=f=%.0f:width_type=h:w=%.0f,astats=metadata=1:reset=1,ametadata=print:file=%s",
+		"aresample=48000,asetnsamples=n=480:p=0,"+
+			"bandpass=f=%.0f:width_type=h:w=%.0f,astats=metadata=1:reset=1,ametadata=print:file=%s",
 		p.BeepFreq, bandpassWidth, logFile,
 	)
 
@@ -154,9 +163,13 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 		}
 
 		// Debounce: only emit if we're at least beepMinGap past last beep.
+		// Subtract beepDetectionDelay so the reported PTS matches the
+		// true beep onset rather than the analysis frame that detected it.
+		// Debounce stays on the raw currentPTS so it's independent of the
+		// calibration constant.
 		if lastBeepPTS < 0 || currentPTS-lastBeepPTS >= beepMinGap {
 			beeps = append(beeps, Beep{
-				PTS:         currentPTS,
+				PTS:         currentPTS - beepDetectionDelay,
 				Participant: participantName,
 				Channel:     channel,
 			})

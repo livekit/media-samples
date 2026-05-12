@@ -143,8 +143,13 @@ func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout 
 	}
 	labelX := x + (w-labelW)/2
 	labelY := y + (h-labelH)/2
+
+	// Force yuv420p before signalstats so YAVG/UAVG/VAVG are always
+	// reported in 0-255 range. Without this, 10/12-bit pixel formats
+	// (e.g. yuv444p12le from HDR VP9 sources) emit 0-4095 values and
+	// the 8-bit flashYAVGThreshold misfires on every frame.
 	filterComplex := fmt.Sprintf(
-		"[0:v]split=2[flash][label];"+
+		"[0:v]format=yuv420p,split=2[flash][label];"+
 			"[flash]crop=%d:8:%d:%d,signalstats,metadata=print:file=%s[fout];"+
 			"[label]crop=%d:%d:%d:%d,signalstats,metadata=print:file=%s[lout]",
 		w, x, y, flashLog,
