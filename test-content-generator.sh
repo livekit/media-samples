@@ -65,26 +65,32 @@ NAMES=(      p0    p1     p2     )
 LABELS=(     P0    P1     P2     )
 BEEP_FREQS=( 523   659    784    )  # C5, E5, G5
 BG_FREQS=(   262   330    392    )  # C4, E4, G4
-TEXT_COLORS=( white cyan   yellow )
+# Per-participant solid background. Dark R/G/B chosen so:
+#   - the white flash bar (Y≈235) is detectable against the bg luma
+#   - U/V are far apart between participants for reliable classification
+#     regardless of where the cell crops/scales the source
+# Matches ColorRed / ColorGreen / ColorBlue in avsync/avsync.go.
+BG_NAMES=(   red       green     blue      )
+BG_HEX=(     0x802020  0x208020  0x202080  )
 
 # ─────────────────────────────────────────────────────────────────────
 # Video generators (per-participant)
 # ─────────────────────────────────────────────────────────────────────
 
 generate_h264() {
-    local name=$1 label=$2 color=$3
-    local outfile="livekit_avsync_${name}_video_${color}_1080p25.h264"
+    local name=$1 label=$2 bg_name=$3 bg_hex=$4
+    local outfile="livekit_avsync_${name}_video_${bg_name}_1080p25.h264"
     echo "  ${outfile}"
     "${FFMPEG}" -y \
-      -f lavfi -r 25 -t ${DURATION} -i "color=black:size=1920x1080:rate=25" \
+      -f lavfi -r 25 -t ${DURATION} -i "color=${bg_hex}:size=1920x1080:rate=25" \
       -loop 1 -t ${DURATION} -i livekit-logo.png \
       -filter_complex "\
-[0:v]drawtext=fontfile=${FONT}:text='${label}':x=20:y=16:fontsize=36:fontcolor=${color}:box=1:boxcolor=0x00000099,\
-drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=${color}:box=1:boxcolor=0x000000bb,\
-drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w-tw-20:y=20:fontsize=28:fontcolor=${color}:box=1:boxcolor=0x00000099,\
+[0:v]drawtext=fontfile=${FONT}:text='${label}':x=w*0.1:y=h*0.1:fontsize=36:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w*0.9-tw:y=h*0.1:fontsize=28:fontcolor=white,\
 drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill[basev];\
 [1:v]scale=-1:100[logo];\
-[basev][logo]overlay=shortest=1:x=20:y=main_h-overlay_h-20,format=yuv420p[v]" \
+[basev][logo]overlay=shortest=1:x=main_w*0.1:y=main_h*0.9-overlay_h,format=yuv420p[v]" \
       -map "[v]" -an \
       -c:v libx264 -pix_fmt yuv420p -profile:v baseline -level 4.0 -bf 0 \
       -colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084 -color_range tv \
@@ -93,38 +99,38 @@ drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill[bas
 }
 
 generate_vp8() {
-    local name=$1 label=$2 color=$3
-    local outfile="livekit_avsync_${name}_video_${color}_1080p24.vp8.ivf"
+    local name=$1 label=$2 bg_name=$3 bg_hex=$4
+    local outfile="livekit_avsync_${name}_video_${bg_name}_1080p24.vp8.ivf"
     echo "  ${outfile}"
     "${FFMPEG}" -y \
-      -f lavfi -r 24 -t ${DURATION} -i "color=black:size=1920x1080:rate=24" \
+      -f lavfi -r 24 -t ${DURATION} -i "color=${bg_hex}:size=1920x1080:rate=24" \
       -loop 1 -t ${DURATION} -i livekit-logo.png \
       -filter_complex "\
-[0:v]drawtext=fontfile=${FONT}:text='${label}':x=20:y=16:fontsize=36:fontcolor=${color}:box=1:boxcolor=0x00000099,\
-drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=${color}:box=1:boxcolor=0x000000bb,\
-drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w-tw-20:y=20:fontsize=28:fontcolor=${color}:box=1:boxcolor=0x00000099,\
+[0:v]drawtext=fontfile=${FONT}:text='${label}':x=w*0.1:y=h*0.1:fontsize=36:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w*0.9-tw:y=h*0.1:fontsize=28:fontcolor=white,\
 drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill,format=yuv420p[basev];\
 [1:v]scale=-1:100[logo];\
-[basev][logo]overlay=shortest=1:x=20:y=main_h-overlay_h-20[v]" \
+[basev][logo]overlay=shortest=1:x=main_w*0.1:y=main_h*0.9-overlay_h[v]" \
       -map "[v]" -an \
       -c:v libvpx -pix_fmt yuv420p -r 24 -g 48 -deadline good -speed 4 -threads 4 \
       -f ivf "${outfile}"
 }
 
 generate_vp9() {
-    local name=$1 label=$2 color=$3
-    local outfile="livekit_avsync_${name}_video_${color}_1080p24.vp9.ivf"
+    local name=$1 label=$2 bg_name=$3 bg_hex=$4
+    local outfile="livekit_avsync_${name}_video_${bg_name}_1080p24.vp9.ivf"
     echo "  ${outfile}"
     "${FFMPEG}" -y \
-      -f lavfi -r 24 -t ${DURATION} -i "color=black:size=1920x1080:rate=24" \
+      -f lavfi -r 24 -t ${DURATION} -i "color=${bg_hex}:size=1920x1080:rate=24" \
       -loop 1 -t ${DURATION} -i livekit-logo.png \
       -filter_complex "\
-[0:v]drawtext=fontfile=${FONT}:text='${label}':x=20:y=16:fontsize=36:fontcolor=${color}:box=1:boxcolor=0x00000099,\
-drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=${color}:box=1:boxcolor=0x000000bb,\
-drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w-tw-20:y=20:fontsize=28:fontcolor=${color}:box=1:boxcolor=0x00000099,\
+[0:v]drawtext=fontfile=${FONT}:text='${label}':x=w*0.1:y=h*0.1:fontsize=36:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w*0.9-tw:y=h*0.1:fontsize=28:fontcolor=white,\
 drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill,format=yuv444p12le[basev];\
 [1:v]scale=-1:100[logo];\
-[basev][logo]overlay=shortest=1:x=20:y=main_h-overlay_h-20[v]" \
+[basev][logo]overlay=shortest=1:x=main_w*0.1:y=main_h*0.9-overlay_h[v]" \
       -map "[v]" -an \
       -c:v libvpx-vp9 -pix_fmt yuv444p12le -profile:v 3 -r 24 -g 48 -row-mt 1 -deadline good -threads 4 \
       -colorspace bt2020nc -color_primaries bt2020 -color_trc smpte2084 -color_range tv \
@@ -222,12 +228,12 @@ echo ""
 echo "=== Generating per-participant samples ==="
 for i in "${!NAMES[@]}"; do
     echo ""
-    echo "--- ${LABELS[$i]} (${TEXT_COLORS[$i]}, beep=${BEEP_FREQS[$i]}Hz, bg=${BG_FREQS[$i]}Hz) ---"
-    generate_h264  "${NAMES[$i]}" "${LABELS[$i]}" "${TEXT_COLORS[$i]}"
+    echo "--- ${LABELS[$i]} (bg=${BG_NAMES[$i]}, beep=${BEEP_FREQS[$i]}Hz, tone=${BG_FREQS[$i]}Hz) ---"
+    generate_h264  "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
     generate_opus  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
     if [ "${NAMES[$i]}" = "p0" ]; then
-        generate_vp8   "${NAMES[$i]}" "${LABELS[$i]}" "${TEXT_COLORS[$i]}"
-        generate_vp9   "${NAMES[$i]}" "${LABELS[$i]}" "${TEXT_COLORS[$i]}"
+        generate_vp8   "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
+        generate_vp9   "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
         generate_wav   "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
         generate_pcmu  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
         generate_pcma  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"

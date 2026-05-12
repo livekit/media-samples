@@ -23,7 +23,6 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -31,8 +30,6 @@ const (
 	beepRMSThreshold = -35.0 // dB: after bandpass filter, beep is detected above this
 	beepMinGap       = 200 * time.Millisecond
 	bandpassWidth    = 50.0 // Hz
-	silenceNoiseDB   = -38
-	silenceMinDur    = 0.1 // seconds
 )
 
 var (
@@ -40,52 +37,39 @@ var (
 	//   lavfi.astats.1.RMS_level=-31.596143
 	// Channel index 1 = left, 2 = right (mono inputs only emit channel 1).
 	// We deliberately do NOT match `Overall.RMS_level` (averages channels).
-	reChannelRMS   = regexp.MustCompile(`lavfi\.astats\.(\d+)\.RMS_level=(-?[0-9.]+)`)
-	rePTSTime      = regexp.MustCompile(`pts_time:([0-9.]+)`)
-	reSilenceStart = regexp.MustCompile(`silence_start:\s*([0-9.]+)`)
-	reSilenceEnd   = regexp.MustCompile(`silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)`)
+	reChannelRMS = regexp.MustCompile(`lavfi\.astats\.(\d+)\.RMS_level=(-?[0-9.]+)`)
+	rePTSTime    = regexp.MustCompile(`pts_time:([0-9.]+)`)
 )
 
 func secToDuration(s float64) time.Duration {
 	return time.Duration(s * float64(time.Second))
 }
 
-// analyzeAudio runs per-participant bandpass beep detection and silence detection.
-func analyzeAudio(cfg Config) (AudioResult, error) {
+// analyzeAudio runs per-participant bandpass beep detection.
+func analyzeAudio(cfg Config) ([]Beep, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
 	}
 
 	tmpDir, err := os.MkdirTemp("", "avsync-audio-*")
 	if err != nil {
-		return AudioResult{}, fmt.Errorf("create temp dir: %w", err)
+		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
 	var allBeeps []Beep
-
 	for _, p := range cfg.Participants {
 		beeps, err := detectBeeps(cfg, p, tmpDir)
 		if err != nil {
-			return AudioResult{}, fmt.Errorf("detect beeps for %s: %w", p.Name, err)
+			return nil, fmt.Errorf("detect beeps for %s: %w", p.Name, err)
 		}
 		allBeeps = append(allBeeps, beeps...)
 	}
 
-	// Sort beeps chronologically.
 	sort.Slice(allBeeps, func(i, j int) bool {
 		return allBeeps[i].PTS < allBeeps[j].PTS
 	})
-
-	silence, err := detectSilence(cfg)
-	if err != nil {
-		return AudioResult{}, fmt.Errorf("detect silence: %w", err)
-	}
-
-	return AudioResult{
-		Beeps:   allBeeps,
-		Silence: silence,
-	}, nil
+	return allBeeps, nil
 }
 
 // detectBeeps runs FFmpeg with a bandpass filter centered on p.BeepFreq,
@@ -222,66 +206,4 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 	}
 
 	return beeps, nil
-}
-
-// detectSilence runs FFmpeg silencedetect and parses stderr for silence ranges.
-func detectSilence(cfg Config) ([]SilenceRange, error) {
-	filter := fmt.Sprintf("silencedetect=noise=%ddB:d=%.2f", silenceNoiseDB, silenceMinDur)
-
-	args := []string{
-		"-i", cfg.FilePath,
-		"-af", filter,
-		"-f", "null", "-",
-	}
-
-	stderr, err := runFFmpeg(runFFmpegArgs{args: args, timeout: cfg.Timeout})
-	if err != nil {
-		return nil, err
-	}
-
-	return parseSilenceLog(string(stderr))
-}
-
-// parseSilenceLog extracts SilenceRange entries from silencedetect stderr output.
-func parseSilenceLog(output string) ([]SilenceRange, error) {
-	var ranges []SilenceRange
-	var pendingStart time.Duration = -1
-
-	for _, line := range strings.Split(output, "\n") {
-		if m := reSilenceStart.FindStringSubmatch(line); m != nil {
-			secs, err := strconv.ParseFloat(m[1], 64)
-			if err == nil {
-				pendingStart = secToDuration(secs)
-			}
-			continue
-		}
-
-		if m := reSilenceEnd.FindStringSubmatch(line); m != nil {
-			endSecs, err := strconv.ParseFloat(m[1], 64)
-			if err != nil {
-				continue
-			}
-			durSecs, err := strconv.ParseFloat(m[2], 64)
-			if err != nil {
-				continue
-			}
-			endPTS := secToDuration(endSecs)
-			dur := secToDuration(durSecs)
-
-			start := pendingStart
-			if start < 0 {
-				// Reconstruct start if we missed a silence_start line.
-				start = endPTS - dur
-			}
-
-			ranges = append(ranges, SilenceRange{
-				Start:    start,
-				End:      endPTS,
-				Duration: dur,
-			})
-			pendingStart = -1
-		}
-	}
-
-	return ranges, nil
 }

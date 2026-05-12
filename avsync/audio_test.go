@@ -26,13 +26,13 @@ func TestAnalyzeAudio(t *testing.T) {
 		Timeout:      30 * time.Second,
 	}
 
-	result, err := analyzeAudio(cfg)
+	beeps, err := analyzeAudio(cfg)
 	if err != nil {
 		t.Fatalf("analyzeAudio failed: %v", err)
 	}
 
 	p0Count, p1Count, p2Count := 0, 0, 0
-	for _, b := range result.Beeps {
+	for _, b := range beeps {
 		switch b.Participant {
 		case "p0":
 			p0Count++
@@ -54,7 +54,7 @@ func TestAnalyzeAudio(t *testing.T) {
 	}
 
 	var lastP0 time.Duration
-	for _, b := range result.Beeps {
+	for _, b := range beeps {
 		if b.Participant == "p0" {
 			if lastP0 > 0 {
 				gap := b.PTS - lastP0
@@ -64,22 +64,5 @@ func TestAnalyzeAudio(t *testing.T) {
 			}
 			lastP0 = b.PTS
 		}
-	}
-}
-
-func TestAnalyzeAudioSilence(t *testing.T) {
-	cfg := Config{
-		FilePath:     "../livekit_avsync_p0_audio_523hz_48k.ogg",
-		Participants: []Participant{P0},
-		Timeout:      30 * time.Second,
-	}
-
-	result, err := analyzeAudio(cfg)
-	if err != nil {
-		t.Fatalf("analyzeAudio failed: %v", err)
-	}
-
-	if len(result.Silence) > 1 {
-		t.Errorf("unexpected silence, got %d", len(result.Silence))
 	}
 }

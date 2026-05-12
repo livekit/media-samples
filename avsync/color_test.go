@@ -26,11 +26,18 @@ func TestClassifyColor(t *testing.T) {
 		stats    regionStats
 		expected string
 	}{
-		{name: "white/p0", stats: regionStats{ymax: 235, umin: 128, vmin: 128, satmax: 0}, expected: "p0"},
-		{name: "cyan/p1", stats: regionStats{ymax: 200, umin: 122, vmin: 11, satmax: 121}, expected: "p1"},
-		{name: "yellow/p2", stats: regionStats{ymax: 210, umin: 9, vmin: 126, satmax: 119}, expected: "p2"},
-		{name: "black/empty", stats: regionStats{ymax: 16, umin: 128, vmin: 128, satmax: 0}, expected: ""},
-		{name: "dark/no content", stats: regionStats{ymax: 30, umin: 128, vmin: 128, satmax: 2}, expected: ""},
+		// Target U/V points (see avsync.go RGB values):
+		//   red:   U=112, V=176
+		//   green: U=96,  V=88
+		//   blue:  U=176, V=120
+		{name: "red/p0 exact", stats: regionStats{uavg: 112, vavg: 176}, expected: "p0"},
+		{name: "green/p1 exact", stats: regionStats{uavg: 96, vavg: 88}, expected: "p1"},
+		{name: "blue/p2 exact", stats: regionStats{uavg: 176, vavg: 120}, expected: "p2"},
+		{name: "red/p0 with white-text pull", stats: regionStats{uavg: 118, vavg: 168}, expected: "p0"},
+		{name: "green/p1 with white-text pull", stats: regionStats{uavg: 104, vavg: 96}, expected: "p1"},
+		{name: "blue/p2 with white-text pull", stats: regionStats{uavg: 168, vavg: 122}, expected: "p2"},
+		{name: "neutral/white flash", stats: regionStats{uavg: 128, vavg: 128}, expected: ""},
+		{name: "near-neutral/no content", stats: regionStats{uavg: 130, vavg: 126}, expected: ""},
 	}
 
 	cc := newColorClassifier(participants)

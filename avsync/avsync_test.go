@@ -22,7 +22,7 @@ import (
 
 func TestAnalyze(t *testing.T) {
 	result, err := Analyze(Config{
-		FilePath: "../livekit_avsync_p0_video_white_1080p25.h264",
+		FilePath: "../livekit_avsync_p0_video_red_1080p25.h264",
 		Regions: []Region{
 			{Name: "full", Rect: image.Rect(0, 0, 1920, 1080)},
 		},
@@ -33,26 +33,24 @@ func TestAnalyze(t *testing.T) {
 		t.Fatalf("Analyze failed: %v", err)
 	}
 
-	frames := result.Video.Regions["full"]
-	if len(frames) == 0 {
-		t.Fatal("no video frames")
+	if len(result.Flashes) < 115 {
+		t.Errorf("expected ~120 flashes, got %d", len(result.Flashes))
 	}
 
-	flashes := result.Video.Flashes["full"]
-	if len(flashes) < 115 {
-		t.Errorf("expected ~120 flashes, got %d", len(flashes))
-	}
-
-	for i, f := range frames {
+	for i, f := range result.Flashes {
+		if f.Region != "full" {
+			t.Errorf("flash %d: region=%q, want full", i, f.Region)
+			break
+		}
 		if f.Participant != "p0" {
-			t.Errorf("frame %d: got %q, want p0", i, f.Participant)
+			t.Errorf("flash %d (PTS=%s): got %q, want p0", i, f.PTS, f.Participant)
 			break
 		}
 	}
 
 	// Video-only file — audio may fail gracefully
-	if len(result.Audio.Beeps) > 0 {
-		t.Logf("note: %d beeps detected in video-only file", len(result.Audio.Beeps))
+	if len(result.Beeps) > 0 {
+		t.Logf("note: %d beeps detected in video-only file", len(result.Beeps))
 	}
 }
 
@@ -66,12 +64,12 @@ func TestAnalyzeAudioOnly(t *testing.T) {
 		t.Fatalf("Analyze failed: %v", err)
 	}
 
-	if len(result.Video.Regions) > 0 {
-		t.Error("expected no video regions for audio-only file")
+	if len(result.Flashes) > 0 {
+		t.Errorf("expected no flashes for audio-only file, got %d", len(result.Flashes))
 	}
 
 	p0Count := 0
-	for _, b := range result.Audio.Beeps {
+	for _, b := range result.Beeps {
 		if b.Participant == "p0" {
 			p0Count++
 		}

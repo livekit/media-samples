@@ -20,10 +20,8 @@ import (
 )
 
 type regionStats struct {
-	ymax   float64
-	umin   float64
-	vmin   float64
-	satmax float64
+	uavg float64
+	vavg float64
 }
 
 type colorTarget struct {
@@ -50,36 +48,27 @@ func newColorClassifier(participants []Participant) *colorClassifier {
 	return cc
 }
 
-const minBrightness = 50
+// Per-participant backgrounds are solid colors; the per-frame average
+// U/V over the sampled region tracks the background closely (text and
+// flash overlays add small amounts of neutral pixels but the
+// participant chroma dominates). Nearest-neighbor in (U,V), with a max
+// distance to reject neutral / out-of-gamut samples (e.g. a pure-white
+// flash frame, an off-region black bar).
+const maxClassifyDist = 40
 
 func (cc *colorClassifier) classify(s regionStats) string {
-	if s.ymax < minBrightness {
-		return ""
-	}
-
 	bestName := ""
 	bestDist := math.MaxFloat64
 
 	for _, t := range cc.targets {
-		var dist float64
-		isTargetNeutral := math.Abs(t.u-128) < 5 && math.Abs(t.v-128) < 5
-		isObsNeutral := s.satmax < 20
-
-		if isTargetNeutral && isObsNeutral {
-			dist = 0
-		} else if isTargetNeutral != isObsNeutral {
-			dist = 1000
-		} else {
-			dist = math.Abs(s.umin-t.u) + math.Abs(s.vmin-t.v)
-		}
-
+		dist := math.Abs(s.uavg-t.u) + math.Abs(s.vavg-t.v)
 		if dist < bestDist {
 			bestDist = dist
 			bestName = t.name
 		}
 	}
 
-	if bestDist > 100 {
+	if bestDist > maxClassifyDist {
 		return ""
 	}
 
