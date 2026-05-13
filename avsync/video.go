@@ -90,9 +90,9 @@ const (
 	flashDebounce      = 200 * time.Millisecond
 )
 
-// analyzeVideo runs FFmpeg on cfg.FilePath and returns a VideoResult
-// containing per-region frame classifications and flash timestamps.
-func analyzeVideo(cfg Config) (VideoResult, error) {
+// analyzeVideo runs FFmpeg on cfg.FilePath and returns the union of flash
+// events across all requested regions, each attributed to a participant.
+func analyzeVideo(cfg Config) ([]Flash, error) {
 	timeout := cfg.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
@@ -100,24 +100,22 @@ func analyzeVideo(cfg Config) (VideoResult, error) {
 
 	cc := newColorClassifier(cfg.Participants)
 
-	result := VideoResult{
-		Regions: make(map[string][]RegionFrame),
-		Flashes: make(map[string][]time.Duration),
-	}
-
+	var flashes []Flash
 	for _, region := range cfg.Regions {
-		if err := analyzeRegion(cfg.FilePath, region, cc, timeout, &result); err != nil {
-			return VideoResult{}, fmt.Errorf("region %q: %w", region.Name, err)
+		regionFlashes, err := analyzeRegion(cfg.FilePath, region, cc, timeout)
+		if err != nil {
+			return nil, fmt.Errorf("region %q: %w", region.Name, err)
 		}
+		flashes = append(flashes, regionFlashes...)
 	}
 
-	return result, nil
+	return flashes, nil
 }
 
-func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout time.Duration, result *VideoResult) error {
+func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout time.Duration) ([]Flash, error) {
 	tmpDir, err := os.MkdirTemp("", "avsync-video-*")
 	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+		return nil, fmt.Errorf("create temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -128,15 +126,34 @@ func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout 
 	x := r.Min.X
 	y := r.Min.Y
 	w := r.Dx()
+	h := r.Dy()
 
 	// Flash stripe: top 8 px of the region.
-	// Label area: top-left 200x50 of the region, starting 10px from the top.
+	// Label area: 60% × 40% centered on the region. With a solid
+	// participant-colored background, the average U/V over this area
+	// is dominated by the background regardless of which part of the
+	// source ends up cropped/scaled into the cell.
+	labelW := w * 60 / 100
+	labelH := h * 40 / 100
+	if labelW < 40 {
+		labelW = 40
+	}
+	if labelH < 30 {
+		labelH = 30
+	}
+	labelX := x + (w-labelW)/2
+	labelY := y + (h-labelH)/2
+
+	// Force yuv420p before signalstats so YAVG/UAVG/VAVG are always
+	// reported in 0-255 range. Without this, 10/12-bit pixel formats
+	// (e.g. yuv444p12le from HDR VP9 sources) emit 0-4095 values and
+	// the 8-bit flashYAVGThreshold misfires on every frame.
 	filterComplex := fmt.Sprintf(
-		"[0:v]split=2[flash][label];"+
+		"[0:v]format=yuv420p,split=2[flash][label];"+
 			"[flash]crop=%d:8:%d:%d,signalstats,metadata=print:file=%s[fout];"+
-			"[label]crop=200:50:%d:%d,signalstats,metadata=print:file=%s[lout]",
+			"[label]crop=%d:%d:%d:%d,signalstats,metadata=print:file=%s[lout]",
 		w, x, y, flashLog,
-		x, y+10, labelLog,
+		labelW, labelH, labelX, labelY, labelLog,
 	)
 
 	args := []string{
@@ -147,52 +164,47 @@ func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout 
 	}
 
 	if _, err := runFFmpeg(runFFmpegArgs{args: args, timeout: timeout}); err != nil {
-		return fmt.Errorf("ffmpeg: %w", err)
+		return nil, fmt.Errorf("ffmpeg: %w", err)
 	}
 
-	// Parse flash log.
 	flashFrames, err := parseMetadataLog(flashLog)
 	if err != nil {
-		return fmt.Errorf("parse flash log: %w", err)
+		return nil, fmt.Errorf("parse flash log: %w", err)
 	}
-
-	// Parse label log.
 	labelFrames, err := parseMetadataLog(labelLog)
 	if err != nil {
-		return fmt.Errorf("parse label log: %w", err)
+		return nil, fmt.Errorf("parse label log: %w", err)
 	}
 
-	// Detect flashes: YAVG >= threshold, debounced.
-	var flashes []time.Duration
-	var lastFlash time.Duration = -flashDebounce - 1
-	for _, f := range flashFrames {
-		yavg := f.vals["YAVG"]
-		if yavg >= flashYAVGThreshold {
-			if f.pts-lastFlash > flashDebounce {
-				flashes = append(flashes, f.pts)
-				lastFlash = f.pts
-			}
-		}
-	}
-
-	// Build per-frame participant classification.
-	frames := make([]RegionFrame, 0, len(labelFrames))
+	// Per-PTS participant classification from the label stripe — used to
+	// attribute each flash to whoever's video was rendered in this cell
+	// at that moment.
+	labels := make(map[time.Duration]string, len(labelFrames))
 	for _, f := range labelFrames {
-		s := regionStats{
-			ymax:   f.vals["YMAX"],
-			umin:   f.vals["UMIN"],
-			vmin:   f.vals["VMIN"],
-			satmax: f.vals["SATMAX"],
-		}
-		participant := cc.classify(s)
-		frames = append(frames, RegionFrame{
-			PTS:         f.pts,
-			Participant: participant,
+		labels[f.pts] = cc.classify(regionStats{
+			uavg: f.vals["UAVG"],
+			vavg: f.vals["VAVG"],
 		})
 	}
 
-	result.Regions[region.Name] = frames
-	result.Flashes[region.Name] = flashes
+	// Detect flashes: YAVG >= threshold, debounced. Attribute each to
+	// the participant rendered at the same PTS.
+	var flashes []Flash
+	var lastFlash time.Duration = -flashDebounce - 1
+	for _, f := range flashFrames {
+		if f.vals["YAVG"] < flashYAVGThreshold {
+			continue
+		}
+		if f.pts-lastFlash <= flashDebounce {
+			continue
+		}
+		flashes = append(flashes, Flash{
+			Region:      region.Name,
+			PTS:         f.pts,
+			Participant: labels[f.pts],
+		})
+		lastFlash = f.pts
+	}
 
-	return nil
+	return flashes, nil
 }

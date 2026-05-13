@@ -20,18 +20,21 @@ import (
 	"time"
 )
 
-// Colors used by the test content generator for participant identification.
+// Colors used by the test content generator as the full-frame background
+// for each participant. Chosen dark enough that a white flash (Y≈235)
+// stands out from the background's luma, and far enough apart in U/V to
+// classify reliably from any sampled region.
 var (
-	ColorWhite  = color.White
-	ColorCyan   = color.RGBA{R: 0, G: 255, B: 255, A: 255}
-	ColorYellow = color.RGBA{R: 255, G: 255, B: 0, A: 255}
+	ColorRed   = color.RGBA{R: 128, G: 32, B: 32, A: 255}
+	ColorGreen = color.RGBA{R: 32, G: 128, B: 32, A: 255}
+	ColorBlue  = color.RGBA{R: 32, G: 32, B: 128, A: 255}
 )
 
 // Pre-defined participants matching the test content generator output.
 var (
-	P0 = Participant{Name: "p0", Color: ColorWhite, BeepFreq: 523}
-	P1 = Participant{Name: "p1", Color: ColorCyan, BeepFreq: 659}
-	P2 = Participant{Name: "p2", Color: ColorYellow, BeepFreq: 784}
+	P0 = Participant{Name: "p0", Color: ColorRed, BeepFreq: 523}
+	P1 = Participant{Name: "p1", Color: ColorGreen, BeepFreq: 659}
+	P2 = Participant{Name: "p2", Color: ColorBlue, BeepFreq: 784}
 
 	AllParticipants = []Participant{P0, P1, P2}
 )
@@ -55,23 +58,8 @@ type Participant struct {
 }
 
 type Result struct {
-	Video VideoResult
-	Audio AudioResult
-}
-
-type VideoResult struct {
-	Regions map[string][]RegionFrame
-	Flashes map[string][]time.Duration
-}
-
-type RegionFrame struct {
-	PTS         time.Duration
-	Participant string
-}
-
-type AudioResult struct {
 	Beeps   []Beep
-	Silence []SilenceRange
+	Flashes []Flash
 }
 
 // BeepChannel identifies which stereo channel(s) a beep was detected on.
@@ -94,8 +82,8 @@ type Beep struct {
 	Channel     BeepChannel
 }
 
-type SilenceRange struct {
-	Start    time.Duration
-	End      time.Duration
-	Duration time.Duration
+type Flash struct {
+	Region      string
+	PTS         time.Duration
+	Participant string
 }
