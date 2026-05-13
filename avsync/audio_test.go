@@ -19,9 +19,7 @@ import (
 	"time"
 )
 
-// Observed jitter across all sample files is <1µs (just float rounding
-// in pts_time parsing). 1ms is 1000x tighter than the prior ±100ms
-// bound while still tolerating ffmpeg-version drift.
+// Observed jitter across all sample files is <1µs
 const beepPTSTolerance = 1 * time.Millisecond
 
 // audioFile describes a generated sample we expect the analyzer to read.
