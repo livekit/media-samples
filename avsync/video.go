@@ -148,23 +148,29 @@ func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout 
 	// reported in 0-255 range. Without this, 10/12-bit pixel formats
 	// (e.g. yuv444p12le from HDR VP9 sources) emit 0-4095 values and
 	// the 8-bit flashYAVGThreshold misfires on every frame.
-	filterComplex := fmt.Sprintf(
-		"[0:v]format=yuv420p,split=2[flash][label];"+
-			"[flash]crop=%d:8:%d:%d,signalstats,metadata=print:file=%s[fout];"+
-			"[label]crop=%d:%d:%d:%d,signalstats,metadata=print:file=%s[lout]",
+	//
+	// Run flash and label detection as two separate -vf passes instead
+	// of a single -filter_complex with split. Some ffmpeg versions
+	// (notably 6.x) reset video PTS to 0 inside filter_complex for
+	// MPEG-TS input, breaking av-sync measurement. Simple -vf filters
+	// preserve the original PTS correctly.
+	flashFilter := fmt.Sprintf(
+		"format=yuv420p,crop=%d:8:%d:%d,signalstats,metadata=print:file=%s",
 		w, x, y, flashLog,
+	)
+	labelFilter := fmt.Sprintf(
+		"format=yuv420p,crop=%d:%d:%d:%d,signalstats,metadata=print:file=%s",
 		labelW, labelH, labelX, labelY, labelLog,
 	)
 
-	args := []string{
-		"-i", filePath,
-		"-filter_complex", filterComplex,
-		"-map", "[fout]", "-f", "null", "-",
-		"-map", "[lout]", "-f", "null", "-",
+	flashArgs := []string{"-i", filePath, "-vf", flashFilter, "-f", "null", "-"}
+	if _, err := runFFmpeg(runFFmpegArgs{args: flashArgs, timeout: timeout}); err != nil {
+		return nil, fmt.Errorf("ffmpeg flash: %w", err)
 	}
 
-	if _, err := runFFmpeg(runFFmpegArgs{args: args, timeout: timeout}); err != nil {
-		return nil, fmt.Errorf("ffmpeg: %w", err)
+	labelArgs := []string{"-i", filePath, "-vf", labelFilter, "-f", "null", "-"}
+	if _, err := runFFmpeg(runFFmpegArgs{args: labelArgs, timeout: timeout}); err != nil {
+		return nil, fmt.Errorf("ffmpeg label: %w", err)
 	}
 
 	flashFrames, err := parseMetadataLog(flashLog)
