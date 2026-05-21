@@ -206,8 +206,14 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 			if err != nil {
 				continue
 			}
-			if math.IsInf(rms, 0) || math.IsNaN(rms) {
+			if math.IsNaN(rms) {
 				continue
+			}
+			// -inf means the channel is digital silence, not absent — record it
+			// as a very low finite value so flushFrame can tell "stereo with one
+			// silent channel" apart from "mono file (no channel 2)".
+			if math.IsInf(rms, -1) {
+				rms = -200
 			}
 			channelRMS[ch] = rms
 		}
