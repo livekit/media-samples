@@ -31,6 +31,13 @@ const (
 	beepMinGap         = 200 * time.Millisecond
 	beepDetectionDelay = 10 * time.Millisecond
 	bandpassWidth      = 50.0 // Hz
+	// channelDominance: when both channels register above beepRMSThreshold,
+	// the louder one wins if it's at least this many dB louder. Bandpass
+	// bleed-through from neighboring participant frequencies puts a small
+	// fraction of a routed beep on the opposite channel; this margin keeps
+	// the detector from misclassifying that bleed as a true "both channel"
+	// signal.
+	channelDominance = 4.0
 )
 
 var (
@@ -145,7 +152,17 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 			ch2Above := ch2 > beepRMSThreshold
 			switch {
 			case ch1Above && ch2Above:
-				channel = BeepChannelBoth
+				// Both above threshold — the louder channel wins if it
+				// dominates by at least channelDominance dB; otherwise
+				// the signal is genuinely on both channels.
+				switch {
+				case ch1-ch2 >= channelDominance:
+					channel = BeepChannelLeft
+				case ch2-ch1 >= channelDominance:
+					channel = BeepChannelRight
+				default:
+					channel = BeepChannelBoth
+				}
 			case ch1Above:
 				channel = BeepChannelLeft
 			case ch2Above:
