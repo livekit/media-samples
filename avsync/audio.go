@@ -36,9 +36,10 @@ const (
 var (
 	// reChannelRMS matches per-channel RMS levels emitted by astats, e.g.:
 	//   lavfi.astats.1.RMS_level=-31.596143
+	//   lavfi.astats.2.RMS_level=-inf       (digitally silent channel)
 	// Channel index 1 = left, 2 = right (mono inputs only emit channel 1).
 	// We deliberately do NOT match `Overall.RMS_level` (averages channels).
-	reChannelRMS = regexp.MustCompile(`lavfi\.astats\.(\d+)\.RMS_level=(-?[0-9.]+)`)
+	reChannelRMS = regexp.MustCompile(`lavfi\.astats\.(\d+)\.RMS_level=(\S+)`)
 	rePTSTime    = regexp.MustCompile(`pts_time:([0-9.]+)`)
 )
 
