@@ -31,14 +31,22 @@ const (
 	beepMinGap         = 200 * time.Millisecond
 	beepDetectionDelay = 10 * time.Millisecond
 	bandpassWidth      = 50.0 // Hz
+	// channelDominance: when both channels register above beepRMSThreshold,
+	// the louder one wins if it's at least this many dB louder. Bandpass
+	// bleed-through from neighboring participant frequencies puts a small
+	// fraction of a routed beep on the opposite channel; this margin keeps
+	// the detector from misclassifying that bleed as a true "both channel"
+	// signal.
+	channelDominance = 4.0
 )
 
 var (
 	// reChannelRMS matches per-channel RMS levels emitted by astats, e.g.:
 	//   lavfi.astats.1.RMS_level=-31.596143
+	//   lavfi.astats.2.RMS_level=-inf       (digitally silent channel)
 	// Channel index 1 = left, 2 = right (mono inputs only emit channel 1).
 	// We deliberately do NOT match `Overall.RMS_level` (averages channels).
-	reChannelRMS = regexp.MustCompile(`lavfi\.astats\.(\d+)\.RMS_level=(-?[0-9.]+)`)
+	reChannelRMS = regexp.MustCompile(`lavfi\.astats\.(\d+)\.RMS_level=(\S+)`)
 	rePTSTime    = regexp.MustCompile(`pts_time:([0-9.]+)`)
 )
 
@@ -144,7 +152,17 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 			ch2Above := ch2 > beepRMSThreshold
 			switch {
 			case ch1Above && ch2Above:
-				channel = BeepChannelBoth
+				// Both above threshold — the louder channel wins if it
+				// dominates by at least channelDominance dB; otherwise
+				// the signal is genuinely on both channels.
+				switch {
+				case ch1-ch2 >= channelDominance:
+					channel = BeepChannelLeft
+				case ch2-ch1 >= channelDominance:
+					channel = BeepChannelRight
+				default:
+					channel = BeepChannelBoth
+				}
 			case ch1Above:
 				channel = BeepChannelLeft
 			case ch2Above:
