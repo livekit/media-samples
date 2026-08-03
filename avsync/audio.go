@@ -38,6 +38,21 @@ const (
 	// the detector from misclassifying that bleed as a true "both channel"
 	// signal.
 	channelDominance = 4.0
+	// runMergeGap: an above-threshold frame this close to the end of the
+	// current run extends it — a beep briefly dipping below threshold
+	// mid-tone must not split into two runs.
+	runMergeGap = 30 * time.Millisecond
+	// Bandpass bleed from a neighboring participant's beep can itself rise
+	// above beepRMSThreshold. When playout skew separates that bleed from
+	// the participant's own beep by more than a frame, it forms its own run
+	// — on whatever channel the neighbor is routed to. A run at least
+	// leakMargin quieter than another run within leakProximity is bleed,
+	// not a beep. Measured bleed peaks 9dB+ below the true beep, while
+	// consecutive true beeps stay within ~1dB of each other; proximity is
+	// capped at half the 1Hz beep cadence so true beeps never suppress
+	// each other.
+	leakMargin    = 6.0 // dB
+	leakProximity = 500 * time.Millisecond
 )
 
 var (
@@ -115,25 +130,90 @@ func detectBeeps(cfg Config, p Participant, tmpDir string) ([]Beep, error) {
 	return parseBeepLog(logFile, p.Name)
 }
 
+// beepFrame is a single astats analysis frame (10 ms). Channel 1 = left,
+// 2 = right; mono inputs only report channel 1.
+type beepFrame struct {
+	pts    time.Duration
+	ch1    float64
+	ch2    float64
+	hasCh2 bool
+}
+
+// level returns the loudest channel's RMS.
+func (f beepFrame) level() float64 {
+	if f.hasCh2 && f.ch2 > f.ch1 {
+		return f.ch2
+	}
+	return f.ch1
+}
+
+// beepRun is a group of consecutive above-threshold frames — one beep
+// candidate. start is the onset frame's PTS; peak is the loudest frame.
+type beepRun struct {
+	start time.Duration
+	end   time.Duration
+	peak  beepFrame
+}
+
 // parseBeepLog reads the metadata log file and extracts debounced beep
-// timestamps. Each frame in the log emits per-channel RMS values (channel 1 =
-// left, 2 = right; mono inputs emit only channel 1). The parser accumulates
-// per-channel RMS for each frame and, when the next pts_time is seen, decides:
+// timestamps. Frames above beepRMSThreshold are grouped into runs, bleed
+// runs from neighboring participant frequencies are rejected, and each
+// surviving run becomes one beep: PTS from the run's onset frame, channel
+// from its loudest frame:
 //
-//   - both channels above threshold      → BeepChannelBoth
-//   - only channel 1 above threshold     → BeepChannelLeft
-//   - only channel 2 above threshold     → BeepChannelRight
-//   - mono input, channel 1 above        → BeepChannelBoth
-//   - neither above threshold            → no beep emitted
+//   - only channel 1 above threshold                → BeepChannelLeft
+//   - only channel 2 above threshold                → BeepChannelRight
+//   - both above, one dominant by channelDominance  → that channel
+//   - both above, neither dominant                  → BeepChannelBoth
+//   - mono input, channel 1 above                   → BeepChannelBoth
+//
+// Classifying at the loudest frame (rather than the onset frame) matters
+// for routed-channel recordings: the onset frame can be bandpass bleed
+// from a neighboring frequency on the opposite channel, arriving slightly
+// ahead of the true beep.
 func parseBeepLog(logFile, participantName string) ([]Beep, error) {
+	frames, err := parseBeepFrames(logFile)
+	if err != nil {
+		return nil, err
+	}
+
+	runs := groupBeepRuns(frames)
+
+	var beeps []Beep
+	var lastBeepPTS time.Duration = -1
+	for i, r := range runs {
+		if isLeakRun(runs, i) {
+			continue
+		}
+		// Debounce: only emit if we're at least beepMinGap past last beep.
+		// Subtract beepDetectionDelay so the reported PTS matches the
+		// true beep onset rather than the analysis frame that detected it.
+		// Debounce stays on the raw onset PTS so it's independent of the
+		// calibration constant.
+		if lastBeepPTS >= 0 && r.start-lastBeepPTS < beepMinGap {
+			continue
+		}
+		beeps = append(beeps, Beep{
+			PTS:         r.start - beepDetectionDelay,
+			Participant: participantName,
+			Channel:     classifyChannel(r.peak),
+		})
+		lastBeepPTS = r.start
+	}
+
+	return beeps, nil
+}
+
+// parseBeepFrames reads per-channel RMS values for each analysis frame in
+// the astats metadata log.
+func parseBeepFrames(logFile string) ([]beepFrame, error) {
 	f, err := os.Open(logFile)
 	if err != nil {
 		return nil, fmt.Errorf("open beep log %s: %w", logFile, err)
 	}
 	defer f.Close()
 
-	var beeps []Beep
-	var lastBeepPTS time.Duration = -1
+	var frames []beepFrame
 
 	var currentPTS time.Duration = -1
 	channelRMS := map[int]float64{}
@@ -144,55 +224,16 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 			return
 		}
 		ch1, has1 := channelRMS[1]
-		ch2, has2 := channelRMS[2]
-		var channel BeepChannel
-		switch {
-		case has1 && has2:
-			ch1Above := ch1 > beepRMSThreshold
-			ch2Above := ch2 > beepRMSThreshold
-			switch {
-			case ch1Above && ch2Above:
-				// Both above threshold — the louder channel wins if it
-				// dominates by at least channelDominance dB; otherwise
-				// the signal is genuinely on both channels.
-				switch {
-				case ch1-ch2 >= channelDominance:
-					channel = BeepChannelLeft
-				case ch2-ch1 >= channelDominance:
-					channel = BeepChannelRight
-				default:
-					channel = BeepChannelBoth
-				}
-			case ch1Above:
-				channel = BeepChannelLeft
-			case ch2Above:
-				channel = BeepChannelRight
-			default:
-				return // no beep on either channel
-			}
-		case has1:
-			// Mono input: only channel 1 reported.
-			if ch1 <= beepRMSThreshold {
-				return
-			}
-			channel = BeepChannelBoth
-		default:
+		if !has1 {
 			return
 		}
-
-		// Debounce: only emit if we're at least beepMinGap past last beep.
-		// Subtract beepDetectionDelay so the reported PTS matches the
-		// true beep onset rather than the analysis frame that detected it.
-		// Debounce stays on the raw currentPTS so it's independent of the
-		// calibration constant.
-		if lastBeepPTS < 0 || currentPTS-lastBeepPTS >= beepMinGap {
-			beeps = append(beeps, Beep{
-				PTS:         currentPTS - beepDetectionDelay,
-				Participant: participantName,
-				Channel:     channel,
-			})
-			lastBeepPTS = currentPTS
-		}
+		ch2, has2 := channelRMS[2]
+		frames = append(frames, beepFrame{
+			pts:    currentPTS,
+			ch1:    ch1,
+			ch2:    ch2,
+			hasCh2: has2,
+		})
 	}
 
 	scanner := bufio.NewScanner(f)
@@ -228,8 +269,8 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 				continue
 			}
 			// -inf means the channel is digital silence, not absent — record it
-			// as a very low finite value so flushFrame can tell "stereo with one
-			// silent channel" apart from "mono file (no channel 2)".
+			// as a very low finite value so classification can tell "stereo with
+			// one silent channel" apart from "mono file (no channel 2)".
 			if math.IsInf(rms, -1) {
 				rms = -200
 			}
@@ -242,5 +283,79 @@ func parseBeepLog(logFile, participantName string) ([]Beep, error) {
 		return nil, fmt.Errorf("scan beep log: %w", err)
 	}
 
-	return beeps, nil
+	return frames, nil
+}
+
+// groupBeepRuns groups above-threshold frames into runs, tolerating dips
+// below threshold shorter than runMergeGap.
+func groupBeepRuns(frames []beepFrame) []beepRun {
+	var runs []beepRun
+	var cur *beepRun
+	for _, f := range frames {
+		if f.level() <= beepRMSThreshold {
+			continue
+		}
+		if cur != nil && f.pts-cur.end <= runMergeGap {
+			cur.end = f.pts
+			if f.level() > cur.peak.level() {
+				cur.peak = f
+			}
+			continue
+		}
+		if cur != nil {
+			runs = append(runs, *cur)
+		}
+		cur = &beepRun{start: f.pts, end: f.pts, peak: f}
+	}
+	if cur != nil {
+		runs = append(runs, *cur)
+	}
+	return runs
+}
+
+// isLeakRun reports whether runs[i] is bandpass bleed: another run within
+// leakProximity peaks at least leakMargin louder.
+func isLeakRun(runs []beepRun, i int) bool {
+	level := runs[i].peak.level()
+	for j := i - 1; j >= 0 && runs[i].start-runs[j].start <= leakProximity; j-- {
+		if runs[j].peak.level()-level >= leakMargin {
+			return true
+		}
+	}
+	for j := i + 1; j < len(runs) && runs[j].start-runs[i].start <= leakProximity; j++ {
+		if runs[j].peak.level()-level >= leakMargin {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyChannel decides which channel(s) a beep landed on from its
+// loudest analysis frame. The frame is above threshold on at least one
+// channel by construction.
+func classifyChannel(f beepFrame) BeepChannel {
+	if !f.hasCh2 {
+		// Mono input: only channel 1 reported.
+		return BeepChannelBoth
+	}
+	ch1Above := f.ch1 > beepRMSThreshold
+	ch2Above := f.ch2 > beepRMSThreshold
+	switch {
+	case ch1Above && ch2Above:
+		// Both above threshold — the louder channel wins if it
+		// dominates by at least channelDominance dB; otherwise
+		// the signal is genuinely on both channels.
+		switch {
+		case f.ch1-f.ch2 >= channelDominance:
+			return BeepChannelLeft
+		case f.ch2-f.ch1 >= channelDominance:
+			return BeepChannelRight
+		default:
+			return BeepChannelBoth
+		}
+	case ch1Above:
+		return BeepChannelLeft
+	default:
+		return BeepChannelRight
+	}
 }
