@@ -15,6 +15,10 @@
 package avsync
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -100,4 +104,162 @@ func absDuration(d time.Duration) time.Duration {
 		return -d
 	}
 	return d
+}
+
+// logFrame is one synthetic astats analysis frame for parseBeepLog tests.
+// RMS values are written verbatim; "" omits the channel line entirely
+// (mono files never emit channel 2).
+type logFrame struct {
+	pts time.Duration
+	ch1 string
+	ch2 string
+}
+
+func writeBeepLog(t *testing.T, frames []logFrame) string {
+	t.Helper()
+
+	var sb strings.Builder
+	for i, f := range frames {
+		fmt.Fprintf(&sb, "frame:%d pts:%d pts_time:%.6f\n", i, i*480, f.pts.Seconds())
+		if f.ch1 != "" {
+			fmt.Fprintf(&sb, "lavfi.astats.1.RMS_level=%s\n", f.ch1)
+		}
+		if f.ch2 != "" {
+			fmt.Fprintf(&sb, "lavfi.astats.2.RMS_level=%s\n", f.ch2)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "beep.log")
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestParseBeepLog covers run grouping, peak-frame channel classification,
+// and bleed rejection on synthetic frame sequences. The bleed cases
+// reproduce routed-channel recordings where a neighboring participant's
+// beep leaks through the bandpass on the opposite channel, offset from the
+// true beep by playout skew.
+func TestParseBeepLog(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+
+	type want struct {
+		pts     time.Duration
+		channel BeepChannel
+	}
+
+	cases := []struct {
+		name   string
+		frames []logFrame
+		want   []want
+	}{
+		{
+			name: "bleed before true beep is rejected",
+			frames: []logFrame{
+				{ms(1000), "-57.0", "-30.0"},
+				{ms(1010), "-57.0", "-31.0"},
+				{ms(1360), "-18.0", "-53.0"},
+				{ms(1370), "-17.5", "-52.0"},
+				{ms(1380), "-19.0", "-53.0"},
+			},
+			want: []want{{ms(1350), BeepChannelLeft}},
+		},
+		{
+			name: "bleed after true beep is rejected",
+			frames: []logFrame{
+				{ms(1000), "-53.0", "-18.0"},
+				{ms(1010), "-52.0", "-17.5"},
+				{ms(1360), "-30.0", "-57.0"},
+				{ms(1370), "-31.0", "-57.0"},
+			},
+			want: []want{{ms(990), BeepChannelRight}},
+		},
+		{
+			name: "bleed at onset of the same run classifies at peak",
+			frames: []logFrame{
+				{ms(1000), "-57.0", "-30.0"},
+				{ms(1010), "-18.0", "-52.0"},
+				{ms(1020), "-18.5", "-53.0"},
+			},
+			want: []want{{ms(990), BeepChannelLeft}},
+		},
+		{
+			name: "equal-level runs are debounced, not rejected",
+			frames: []logFrame{
+				{ms(1000), "-18.0", "-53.0"},
+				{ms(1150), "-18.5", "-53.0"},
+			},
+			want: []want{{ms(990), BeepChannelLeft}},
+		},
+		{
+			name: "consecutive beeps at 1s cadence are both kept",
+			frames: []logFrame{
+				{ms(1000), "-18.0", "-53.0"},
+				{ms(2000), "-18.5", "-53.0"},
+			},
+			want: []want{
+				{ms(990), BeepChannelLeft},
+				{ms(1990), BeepChannelLeft},
+			},
+		},
+		{
+			name: "quiet run with no louder neighbor is still a beep",
+			frames: []logFrame{
+				{ms(1000), "-33.0", "-80.0"},
+			},
+			want: []want{{ms(990), BeepChannelLeft}},
+		},
+		{
+			name: "dip below threshold shorter than runMergeGap does not split the run",
+			frames: []logFrame{
+				{ms(1000), "-20.0", "-60.0"},
+				{ms(1010), "-40.0", "-60.0"},
+				{ms(1020), "-18.0", "-60.0"},
+			},
+			want: []want{{ms(990), BeepChannelLeft}},
+		},
+		{
+			name: "mono beep reports both channels",
+			frames: []logFrame{
+				{ms(1000), "-18.0", ""},
+				{ms(1010), "-18.5", ""},
+			},
+			want: []want{{ms(990), BeepChannelBoth}},
+		},
+		{
+			name: "digitally silent right channel reports left",
+			frames: []logFrame{
+				{ms(1000), "-18.0", "-inf"},
+			},
+			want: []want{{ms(990), BeepChannelLeft}},
+		},
+		{
+			name: "both channels loud without dominance reports both",
+			frames: []logFrame{
+				{ms(1000), "-18.0", "-19.0"},
+			},
+			want: []want{{ms(990), BeepChannelBoth}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			beeps, err := parseBeepLog(writeBeepLog(t, tc.frames), "p0")
+			if err != nil {
+				t.Fatalf("parseBeepLog: %v", err)
+			}
+			if len(beeps) != len(tc.want) {
+				t.Fatalf("got %d beeps (%+v), want %d", len(beeps), beeps, len(tc.want))
+			}
+			for i, w := range tc.want {
+				if diff := absDuration(beeps[i].PTS - w.pts); diff > beepPTSTolerance {
+					t.Errorf("beep %d: PTS=%s, want %s ±%s", i, beeps[i].PTS, w.pts, beepPTSTolerance)
+				}
+				if beeps[i].Channel != w.channel {
+					t.Errorf("beep %d: channel=%d, want %d", i, beeps[i].Channel, w.channel)
+				}
+			}
+		})
+	}
 }
