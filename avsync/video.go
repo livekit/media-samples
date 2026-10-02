@@ -163,12 +163,14 @@ func analyzeRegion(filePath string, region Region, cc *colorClassifier, timeout 
 		labelW, labelH, labelX, labelY, labelLog,
 	)
 
-	flashArgs := []string{"-i", filePath, "-vf", flashFilter, "-f", "null", "-"}
+	// Single-threaded decode: ffmpeg 6.1 (Ubuntu 24.04) aborts with
+	// "Assertion pkt failed at ffmpeg_dec.c" on threaded libdav1d (AV1) input.
+	flashArgs := []string{"-threads", "1", "-i", filePath, "-vf", flashFilter, "-f", "null", "-"}
 	if _, err := runFFmpeg(runFFmpegArgs{args: flashArgs, timeout: timeout}); err != nil {
 		return nil, fmt.Errorf("ffmpeg flash: %w", err)
 	}
 
-	labelArgs := []string{"-i", filePath, "-vf", labelFilter, "-f", "null", "-"}
+	labelArgs := []string{"-threads", "1", "-i", filePath, "-vf", labelFilter, "-f", "null", "-"}
 	if _, err := runFFmpeg(runFFmpegArgs{args: labelArgs, timeout: timeout}); err != nil {
 		return nil, fmt.Errorf("ffmpeg label: %w", err)
 	}

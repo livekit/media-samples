@@ -18,6 +18,11 @@ set -euo pipefail
 
 DURATION=120
 
+# Optional codec filter: ./test-content-generator.sh av1 regenerates only that
+# codec's samples, leaving the committed files for the others untouched.
+ONLY="${1:-}"
+want() { [ -z "${ONLY}" ] || [ "${ONLY}" = "$1" ]; }
+
 # ffmpeg with drawtext support (macOS: ffmpeg@7 from Homebrew, Linux: system ffmpeg)
 if [ -x "/opt/homebrew/opt/ffmpeg@7/bin/ffmpeg" ]; then
     FFMPEG="/opt/homebrew/opt/ffmpeg@7/bin/ffmpeg"
@@ -137,6 +142,29 @@ drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill,for
       -f ivf "${outfile}"
 }
 
+generate_av1() {
+    local name=$1 label=$2 bg_name=$3 bg_hex=$4
+    local outfile="livekit_avsync_${name}_video_${bg_name}_1080p24.av1.ivf"
+    echo "  ${outfile}"
+    # pred-struct=1 keeps SVT-AV1 in low-delay mode: frames stay in
+    # presentation order like a real-time WebRTC encoder, so the IVF can be
+    # paced straight onto RTP. scd=0 pins keyframes to the 48-frame GOP.
+    "${FFMPEG}" -y \
+      -f lavfi -r 24 -t ${DURATION} -i "color=${bg_hex}:size=1920x1080:rate=24" \
+      -loop 1 -t ${DURATION} -i livekit-logo.png \
+      -filter_complex "\
+[0:v]drawtext=fontfile=${FONT}:text='${label}':x=w*0.1:y=h*0.1:fontsize=36:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{eif\\:t\\:d}':x=(w-tw)/2:y=(h-th)/2:fontsize=220:fontcolor=white,\
+drawtext=fontfile=${FONT}:text='%{pts\\:hms}':x=w*0.9-tw:y=h*0.1:fontsize=28:fontcolor=white,\
+drawbox=enable='lt(mod(t,1),0.05)':x=0:y=0:w=iw:h=90:color=white@0.85:t=fill,format=yuv420p[basev];\
+[1:v]scale=-1:100[logo];\
+[basev][logo]overlay=shortest=1:x=main_w*0.1:y=main_h*0.9-overlay_h[v]" \
+      -map "[v]" -an \
+      -c:v libsvtav1 -pix_fmt yuv420p -preset 8 -crf 30 -r 24 -g 48 \
+      -svtav1-params "scd=0:pred-struct=1" \
+      -f ivf "${outfile}"
+}
+
 # ─────────────────────────────────────────────────────────────────────
 # Audio generators (per-participant)
 # ─────────────────────────────────────────────────────────────────────
@@ -229,14 +257,15 @@ echo "=== Generating per-participant samples ==="
 for i in "${!NAMES[@]}"; do
     echo ""
     echo "--- ${LABELS[$i]} (bg=${BG_NAMES[$i]}, beep=${BEEP_FREQS[$i]}Hz, tone=${BG_FREQS[$i]}Hz) ---"
-    generate_h264  "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
-    generate_opus  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
+    want h264 && generate_h264  "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
+    want opus && generate_opus  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
     if [ "${NAMES[$i]}" = "p0" ]; then
-        generate_vp8   "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
-        generate_vp9   "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
-        generate_wav   "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
-        generate_pcmu  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
-        generate_pcma  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
+        want vp8  && generate_vp8   "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
+        want vp9  && generate_vp9   "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
+        want av1  && generate_av1   "${NAMES[$i]}" "${LABELS[$i]}" "${BG_NAMES[$i]}" "${BG_HEX[$i]}"
+        want wav  && generate_wav   "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
+        want pcmu && generate_pcmu  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
+        want pcma && generate_pcma  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
     fi
 done
 
