@@ -248,6 +248,28 @@ generate_pcma() {
       "${outfile}"
 }
 
+# ─────────────────────────────────────────────────────────────────────
+# Layer-switch samples
+#
+# Two simulcast layers of one 9:16 picture, sized the way LiveKit ingress
+# fits a portrait source into its 720p preset. Each layer carries its own
+# pixel aspect ratio in the SPS, so a switch between them changes the
+# pixel-aspect-ratio caps mid-stream.
+# ─────────────────────────────────────────────────────────────────────
+
+generate_par_switch_h264() {
+    local size=$1 sar=$2
+    local outfile="livekit_par_switch_video_${size}_sar${sar/\//x}_25fps.h264"
+    echo "  ${outfile}"
+    "${FFMPEG}" -y \
+      -f lavfi -t 2 -i "testsrc2=size=${size}:rate=25" \
+      -an \
+      -c:v libx264 -pix_fmt yuv420p -profile:v baseline -bf 0 -b:v 300k \
+      -x264-params "keyint=25:min-keyint=25:scenecut=0" \
+      -bsf:v "h264_metadata=sample_aspect_ratio=${sar}" \
+      -f h264 "${outfile}"
+}
+
 # =====================================================================
 # Generate per-participant samples
 # =====================================================================
@@ -268,6 +290,11 @@ for i in "${!NAMES[@]}"; do
         want pcma && generate_pcma  "${NAMES[$i]}" "${BEEP_FREQS[$i]}" "${BG_FREQS[$i]}"
     fi
 done
+
+echo ""
+echo "=== Generating layer-switch samples ==="
+generate_par_switch_h264 202x360 405/404
+generate_par_switch_h264 406x720 405/406
 
 echo ""
 echo "=== Done ==="
